@@ -1,69 +1,78 @@
-from fastapi import FastAPI, HTTPException, Depends
-from database import get_db
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-import models as m
 from typing import List
-import pyd
+import shutil
+import os
+import uuid
 
+from database import SessionLocal, init_db
+import models
+import schemas
+import crud
+from utils import save_image
 
-app=FastAPI()
+app = FastAPI()
 
-# Жанры
-@app.get('/genres', response_model=List[pyd.BaseGenre])
-def get_all_genres(db:Session=Depends(get_db)):
-    genres = db.query(m.Genre).all()
-    return genres
+# dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.post("/genres")
-def movie_product(genre:pyd.CreateGenre, db:Session=Depends(get_db)):
-    genre_db = m.Genre()
-    genre_db.genre_name = genre.genre_name
+@app.on_event("startup")
+def startup():
+    init_db()
 
-    db.add(genre_db)
-    db.commit()
-    return genre_db
+# --- Жанры ---
+@app.get("/genres", response_model=List[schemas.Genre])
+def read_genres(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    return crud.get_genres(db, skip=skip, limit=limit)
 
-# Фильмы
-@app.get("/movies", response_model=List[pyd.BaseMovie])
-def get_all_movies(db:Session=Depends(get_db)):
-    movies = db.query(m.Movie).all()
-    return movies
+@app.post("/genres", response_model=schemas.Genre)
+def create_genre(genre: schemas.GenreCreate, db: Session = Depends(get_db)):
+    return crud.create_genre(db, genre)
 
-@app.get("/movies/{movie_id}")
-def get_movie(movie_id:int, db:Session=Depends(get_db)):
-    movie = db.query(m.Movie).filter(
-        m.Movie.id==movie_id
-    ).first()
+# --- Фильмы ---
+@app.get("/movies", response_model=List[schemas.Movie])
+def read_movies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    return crud.get_movies(db, skip=skip, limit=limit)
+
+@app.get("/movies/{movie_id}", response_model=schemas.Movie)
+def read_movie(movie_id: int, db: Session = Depends(get_db)):
+    movie = crud.get_movie(db, movie_id)
     if not movie:
-        raise HTTPException(404, 'Фильм не найдена')
+        raise HTTPException(status_code=404, detail="Фильм не найден")
     return movie
 
-@app.post("/movies")
-def movie_add(genre:pyd.CreateMovie, db:Session=Depends(get_db)):
-    movie_db = m.Movie()
-    movie_db.movie_name = genre.movie_name
-    db.add(movie_db)
-    db.commit()
-    return movie_db
+@app.post("/movies", response_model=schemas.Movie)
+def create_movie(movie: schemas.MovieCreate, db: Session = Depends(get_db)):
+    return crud.create_movie(db, movie)
+
+@app.put("/movies/{movie_id}", response_model=schemas.Movie)
+def update_movie(movie_id: int, movie_update: schemas.MovieUpdate, db: Session = Depends(get_db)):
+    movie = crud.update_movie(db, movie_id, movie_update)
+    if not movie:
+        raise HTTPException(status_code=404, detail="Фильм не найден")
+    return movie
 
 @app.delete("/movies/{movie_id}")
-def delete_product(movie_id:int, db:Session=Depends(get_db)):
-    movie = db.query(m.Movie).filter(
-        m.Movie.id==movie_id
-    ).first()
-    if not movie:
-        raise HTTPException(404, 'Фильм не найден')
-    db.delete(movie)
-    db.commit()
-    return {'detail': "Фильм удален"}
+def delete_movie(movie_id: int, db: Session = Depends(get_db)):
+    success = crud.delete_movie(db, movie_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Фильм не найден")
+    return {"detail": "Фильм удален"}
 
-@app.put("/movies/{movie_id}", response_model=List[pyd.BaseMovie])
-def get_all_movies(db:Session=Depends(get_db)):
-    movies = db.query(m.Movie).all()
-    return movies
+@app.put("/movies/{movie_id}/image")
+def update_movie_image(movie_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # Валидация файла
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Недопустимый тип файла")
+    # Сохраняем изображение (обработка по имени и размеру)
+    filename = save_image(file)
+    updated_movie = crud.update_movie_poster(db, movie_id, filename)
+    if not updated_movie:
+        raise HTTPException(status_code=404, detail="Фильм не найден")
+    return {"poster_url": filename}
 
-
-@app.put("/movies/{movie_id}/movie_poster", response_model=List[pyd.BaseMovie])
-def get_all_movies(db:Session=Depends(get_db)):
-    movies = db.query(m.Movie).all()
-    return movies
